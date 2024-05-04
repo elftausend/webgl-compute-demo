@@ -1,0 +1,28 @@
+[package]
+name = "webgl-demo"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+js-sys = "0.3.67"
+wasm-bindgen = "0.2.90"
+naga = { git = "https://github.com/elftausend/wgpu", features = ["wgsl-in", "glsl-out"]}
+
+[dependencies.web-sys]
+version = "0.3.4"
+features = [
+  'console',
+  'Document',
+  'Element',
+  'HtmlCanvasElement',
+  'WebGlBuffer',
+  'WebGlVertexArrayObject',
+  'WebGl2RenderingContext',
+  'WebGlProgram',
+  'WebGlShader',
+  'Window',
+]
