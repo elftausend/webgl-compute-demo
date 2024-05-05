@@ -58,8 +58,7 @@ fn start() -> Result<(), JsValue> {
 
         void main() {
             thread_uv = texcoords;
-            gl_Position = vec4 (position.x, position.y, position.z, 1.0);
-            // gl_Position = position;
+            gl_Position = position;
         }
         "##,
     )?;
