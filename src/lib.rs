@@ -1,11 +1,22 @@
+use js_sys::{Array, Uint32Array};
 use wasm_bindgen::prelude::*;
-use web_sys::{Element, WebGl2RenderingContext, WebGlProgram, WebGlShader};
+use web_sys::{Element, WebGl2RenderingContext, WebGlProgram, WebGlShader, WebGlTexture};
 
 use naga::{
     back::glsl::{Options, PipelineOptions, Version, Writer},
     proc::BoundsCheckPolicies,
     valid::ModuleInfo,
 };
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+macro_rules! log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
 
 pub fn parse_and_validate_wgsl(
     src: &str,
@@ -99,23 +110,35 @@ fn start() -> Result<(), JsValue> {
         BoundsCheckPolicies::default(),
     )
     .unwrap();
-    writer.write_webgl_compute().unwrap();
+
+    let reflection_info = writer.write_webgl_compute().unwrap();
+    log!("ref info: {reflection_info:?}");
+    let input_storage_uniform_names = reflection_info
+        .input_storage_uniforms
+        .values()
+        .collect::<Vec<_>>();
 
     let glsl = glsl.replace("#version 310 es", "#version 300 es");
 
-    let frag_shader = compile_shader(
-        &context,
-        WebGl2RenderingContext::FRAGMENT_SHADER,
-        &glsl,
-    )?;
+    let frag_shader = compile_shader(&context, WebGl2RenderingContext::FRAGMENT_SHADER, &glsl)?;
     let program = link_program(&context, &vert_shader, &frag_shader)?;
     context.use_program(Some(&program));
 
-    let vertices: [f32; 9] = [-0.7, -0.7, 0.0, 0.7, -0.7, 0.0, 0.0, 0.7, 0.0];
+    let frame_buf = context
+        .create_framebuffer()
+        .ok_or("Failed to create frame buffer")?;
+
+    #[rustfmt::skip]
+    let vertices: [f32; 12] = [
+        -1.0,-1.0, 0.0, 
+        -1.0, 1.0, 0.0, 
+         1.0, 1.0, 0.0, 
+         1.0,-1.0, 0.0
+     ];
 
     let position_attribute_location = context.get_attrib_location(&program, "position");
-    let buffer = context.create_buffer().ok_or("Failed to create buffer")?;
-    context.bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, Some(&buffer));
+    let position_buffer = context.create_buffer().ok_or("Failed to create buffer")?;
+    context.bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, Some(&position_buffer));
 
     // Note that `Float32Array::view` is somewhat dangerous (hence the
     // `unsafe`!). This is creating a raw view into our module's
@@ -135,10 +158,10 @@ fn start() -> Result<(), JsValue> {
         );
     }
 
-    let vao = context
-        .create_vertex_array()
-        .ok_or("Could not create vertex array object")?;
-    context.bind_vertex_array(Some(&vao));
+    // let vao = context
+    //     .create_vertex_array()
+    //     .ok_or("Could not create vertex array object")?;
+    // context.bind_vertex_array(Some(&vao));
 
     context.vertex_attrib_pointer_with_i32(
         position_attribute_location as u32,
@@ -150,12 +173,283 @@ fn start() -> Result<(), JsValue> {
     );
     context.enable_vertex_attrib_array(position_attribute_location as u32);
 
-    context.bind_vertex_array(Some(&vao));
+    // context.bind_vertex_array(Some(&vao));
 
-    let vert_count = (vertices.len() / 3) as i32;
-    draw(&context, vert_count);
+    #[rustfmt::skip]
+    let tex_coords: [f32; 8] = [
+        0.0, 0.0,
+        0.0, 1.0,
+        1.0, 1.0,
+        1.0, 0.0
+    ];
+
+    let texcoords_buffer = context.create_buffer().ok_or("Failed to create buffer")?;
+    let texcoords_attribute_location = context.get_attrib_location(&program, "texcoords");
+    context.bind_buffer(
+        WebGl2RenderingContext::ARRAY_BUFFER,
+        Some(&texcoords_buffer),
+    );
+    context.vertex_attrib_pointer_with_i32(
+        texcoords_attribute_location as u32,
+        3,
+        WebGl2RenderingContext::FLOAT,
+        false,
+        0,
+        0,
+    );
+    context.enable_vertex_attrib_array(texcoords_attribute_location as u32);
+
+    unsafe {
+        let positions_array_buf_view = js_sys::Float32Array::view(&tex_coords);
+
+        context.buffer_data_with_array_buffer_view(
+            WebGl2RenderingContext::ARRAY_BUFFER,
+            &positions_array_buf_view,
+            WebGl2RenderingContext::STATIC_DRAW,
+        );
+    }
+
+    let indices: [u16; 6] = [0, 1, 2, 2, 3, 0];
+
+    let indices_buffer = context.create_buffer().ok_or("Failed to create buffer")?;
+    context.bind_buffer(
+        WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
+        Some(&indices_buffer),
+    );
+
+    unsafe {
+        let positions_array_buf_view = js_sys::Uint16Array::view(&indices);
+
+        context.buffer_data_with_array_buffer_view(
+            WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
+            &positions_array_buf_view,
+            WebGl2RenderingContext::STATIC_DRAW,
+        );
+    }
+
+    let thread_viewport_width_uniform = context
+        .get_uniform_location(&program, "thread_viewport_width")
+        .ok_or("cannot find thread vpw")?;
+    let thread_viewport_height_uniform = context
+        .get_uniform_location(&program, "thread_viewport_height")
+        .ok_or("cannot find thread vpw")?;
+
+    let gws_x_uniform = context
+        .get_uniform_location(&program, "gws_x")
+        .ok_or("cannot find gws")?;
+    let gws_y_uniform = context
+        .get_uniform_location(&program, "gws_y")
+        .ok_or("cannot find gws")?;
+    let gws_z_uniform = context
+        .get_uniform_location(&program, "gws_z")
+        .ok_or("cannot find gws")?;
+
+    let mut input_uniforms = Vec::with_capacity(input_storage_uniform_names.len());
+
+    // TODO: support e.g. floats as inputs
+    for uniform_name in input_storage_uniform_names {
+        input_uniforms.push([
+            context
+                .get_uniform_location(&program, uniform_name)
+                .ok_or("cannot find uniform")?,
+            context
+                .get_uniform_location(&program, &format!("{uniform_name}_texture_width"))
+                .ok_or("cannot find uniform")?,
+            context
+                .get_uniform_location(&program, &format!("{uniform_name}_texture_height"))
+                .ok_or("cannot find uniform")?,
+        ]);
+    }
+
+    let mut lhs = WebGlBuffer::new(&context, 16).unwrap();
+
+    let f32_slice = unsafe {
+        std::slice::from_raw_parts_mut(
+            lhs.texture_data.as_mut_ptr() as *mut f32,
+            lhs.texture_data.len() / 4,
+        )
+    };
+    for x in f32_slice {
+        *x = 2.;
+    }
+
+    /*let mut rhs = WebGlBuffer::new(&context, 16).unwrap();
+
+    let f32_slice = unsafe { std::slice::from_raw_parts_mut(rhs.texture_data.as_mut_ptr() as *mut f32, rhs.texture_data.len() / 4) };
+    for x in f32_slice {
+        *x = 3.;
+    }*/
+
+    let mut out = WebGlBuffer::new(&context, 16).unwrap();
+
+    let color_attachments = Array::new();
+
+    let attachment = WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0;
+    color_attachments.push(&JsValue::from(attachment));
+
+    context.bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, Some(&frame_buf));
+    context.draw_buffers(&color_attachments);
+
+    context.framebuffer_texture_2d(
+        WebGl2RenderingContext::FRAMEBUFFER,
+        WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0,
+        WebGl2RenderingContext::TEXTURE_2D,
+        Some(&out.texture),
+        0,
+    );
+
+    context.use_program(Some(&program));
+
+    context.viewport(0, 0, out.texture_width as i32, out.texture_height as i32);
+    context.uniform1ui(
+        Some(&thread_viewport_width_uniform),
+        out.texture_width as u32,
+    );
+    context.uniform1ui(
+        Some(&thread_viewport_height_uniform),
+        out.texture_height as u32,
+    );
+
+    context.uniform1ui(Some(&gws_x_uniform), out.texture_width as u32);
+    context.uniform1ui(Some(&gws_y_uniform), out.texture_height as u32);
+    context.uniform1ui(Some(&gws_z_uniform), 1);
+
+    for (idx, (input_uniform, gl_buf)) in input_uniforms.iter().zip([&lhs]).enumerate() {
+        context.uniform1i(Some(&input_uniform[0]), idx as i32);
+        context.uniform1ui(Some(&input_uniform[1]), gl_buf.texture_width as u32);
+        context.uniform1ui(Some(&input_uniform[2]), gl_buf.texture_height as u32);
+        context.active_texture(WebGl2RenderingContext::TEXTURE0 + idx as u32);
+        context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&gl_buf.texture))
+    }
+
+    // let vert_count = (vertices.len() / 3) as i32;
+    // draw(&context, vert_count);
+
+    context.bind_buffer(
+        WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
+        Some(&indices_buffer),
+    );
+
+    context.draw_elements_with_i32(WebGl2RenderingContext::TRIANGLES, 6, WebGl2RenderingContext::UNSIGNED_SHORT, 0);
+
+    // for all outputs (mind + 0)
+    context.framebuffer_texture_2d(
+        WebGl2RenderingContext::FRAMEBUFFER,
+        WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0,
+        WebGl2RenderingContext::TEXTURE_2D,
+        None,
+        0,
+    );
+
+    context.bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, None);
+
+    // read .. bind again
+
+
+    context.bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, Some(&frame_buf));
+    context.framebuffer_texture_2d(
+        WebGl2RenderingContext::FRAMEBUFFER,
+        WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0,
+        WebGl2RenderingContext::TEXTURE_2D,
+        Some(&out.texture),
+        0,
+    );
+
+    assert_eq!(context.check_framebuffer_status(WebGl2RenderingContext::FRAMEBUFFER), WebGl2RenderingContext::FRAMEBUFFER_COMPLETE);
+
+    context.read_pixels_with_u8_array_and_dst_offset(0, 0, out.texture_width as i32, out.texture_height as i32, WebGl2RenderingContext::RGBA, WebGl2RenderingContext::UNSIGNED_BYTE, &mut out.texture_data, 0).unwrap();
+
+    context.bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, None);
+
+    let f32_slice = unsafe {
+        std::slice::from_raw_parts_mut(
+            out.texture_data.as_mut_ptr() as *mut f32,
+            out.texture_data.len() / 4,
+        )
+    };
+
+    log!("out: {f32_slice:?}");
 
     Ok(())
+}
+
+fn compute_texture_dimensions(length: usize) -> (usize, usize) {
+    let sqrt = (length as f64).sqrt().ceil();
+    (sqrt as usize, sqrt as usize)
+}
+
+struct WebGlBuffer<'a> {
+    texture: WebGlTexture,
+    texture_data: Vec<u8>,
+    texture_width: usize,
+    texture_height: usize,
+    context: &'a WebGl2RenderingContext,
+}
+
+impl<'a> WebGlBuffer<'a> {
+    pub fn new(context: &'a WebGl2RenderingContext, len: usize) -> Option<Self> {
+        let texture = context.create_texture()?;
+        let texture_data = vec![0u8; len * 4];
+        let (texture_width, texture_height) = compute_texture_dimensions(len);
+
+        context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
+        context.tex_parameteri(
+            WebGl2RenderingContext::TEXTURE_2D,
+            WebGl2RenderingContext::TEXTURE_MIN_FILTER,
+            WebGl2RenderingContext::NEAREST as i32,
+        );
+        context.tex_parameteri(
+            WebGl2RenderingContext::TEXTURE_2D,
+            WebGl2RenderingContext::TEXTURE_MAG_FILTER,
+            WebGl2RenderingContext::NEAREST as i32,
+        );
+        context.tex_parameteri(
+            WebGl2RenderingContext::TEXTURE_2D,
+            WebGl2RenderingContext::TEXTURE_WRAP_S,
+            WebGl2RenderingContext::CLAMP_TO_EDGE as i32,
+        );
+        context.tex_parameteri(
+            WebGl2RenderingContext::TEXTURE_2D,
+            WebGl2RenderingContext::TEXTURE_WRAP_T,
+            WebGl2RenderingContext::CLAMP_TO_EDGE as i32,
+        );
+        context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, None);
+
+        Some(
+            WebGlBuffer {
+                texture,
+                texture_data,
+                texture_width,
+                texture_height,
+                context,
+            }
+            .push()?,
+        )
+    }
+
+    pub fn push(self) -> Option<Self> {
+        self.context
+            .bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&self.texture));
+
+        unsafe {
+            let texture_data = js_sys::Uint8Array::view(&self.texture_data);
+
+            self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
+                WebGl2RenderingContext::TEXTURE_2D,
+                0,
+                WebGl2RenderingContext::RGBA as i32,
+                self.texture_width as i32,
+                self.texture_height as i32,
+                0,
+                WebGl2RenderingContext::RGBA,
+                WebGl2RenderingContext::UNSIGNED_BYTE,
+                Some(&texture_data)
+            ).ok()?;
+        }
+        self.context
+            .bind_texture(WebGl2RenderingContext::TEXTURE_2D, None);
+        Some(self)
+    }
 }
 
 fn draw(context: &WebGl2RenderingContext, vert_count: i32) {
