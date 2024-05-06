@@ -75,11 +75,17 @@ fn start() -> Result<(), JsValue> {
             @compute
             @workgroup_size(32)
             fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-                /*if global_id.x >= arrayLength(&out) {
+                if global_id.x >= arrayLength(&out) {
                     return;    
-                }*/
+                }
+
+                var counter = 0.0;
+                for (var i = 0; i < 10; i++) {
+                    counter += 1.0;
+                }
+
                 // if out is used on the right side: problem at the moment
-                out[global_id.x] = 3.0 * x[global_id.x];
+                out[global_id.x] = counter * x[global_id.x];
                 // out[global_id.x] = 3.0;
             }
 
@@ -115,6 +121,9 @@ fn start() -> Result<(), JsValue> {
 
     let reflection_info = writer.write_webgl_compute().unwrap();
     log!("ref info: {reflection_info:?}");
+
+    let output_storage_layout_names = reflection_info.outputs.values().collect::<Vec<_>>();
+
     let input_storage_uniform_names = reflection_info
         .input_storage_uniforms
         .values()
@@ -134,7 +143,7 @@ fn start() -> Result<(), JsValue> {
     #[rustfmt::skip]
     let vertices: [f32; 12] = [
         -1.0,-1.0, 0.0, 
-        -1.0, 1.0, 0.0, 
+        -1.0, 1.0, 0.0,
          1.0, 1.0, 0.0, 
          1.0,-1.0, 0.0
      ];
@@ -254,13 +263,30 @@ fn start() -> Result<(), JsValue> {
         input_uniforms.push([
             context
                 .get_uniform_location(&program, uniform_name)
-                .ok_or("cannot find uniform")?,
+                .ok_or("cannot find uniform input")?,
             context
                 .get_uniform_location(&program, &format!("{uniform_name}_texture_width"))
-                .ok_or("cannot find uniform")?,
+                .ok_or("cannot find uniform input width")?,
             context
                 .get_uniform_location(&program, &format!("{uniform_name}_texture_height"))
-                .ok_or("cannot find uniform")?,
+                .ok_or("cannot find uniform input height")?,
+        ]);
+    }
+
+    context
+        .get_uniform_location(&program, "_group_0_binding_0_cs_texture_height")
+        .ok_or("not found")?;
+
+    let mut output_size_uniforms = Vec::with_capacity(output_storage_layout_names.len());
+
+    for uniform_name in output_storage_layout_names {
+        output_size_uniforms.push([
+            context
+                .get_uniform_location(&program, &format!("{uniform_name}_texture_width"))
+                .ok_or("cannot find uniform out width")?,
+            context
+                .get_uniform_location(&program, &format!("{uniform_name}_texture_height"))
+                .ok_or("cannot find uniform out height")?,
         ]);
     }
 
@@ -290,7 +316,6 @@ fn start() -> Result<(), JsValue> {
     // let color_attachments = Array::new();
     let color_attachments = Uint32Array::new(&JsValue::from(1));
 
-
     let attachment = WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0;
     color_attachments.set_index(0, attachment);
     // color_attachments.push(&JsValue::from(attachment));
@@ -304,13 +329,11 @@ fn start() -> Result<(), JsValue> {
         WebGl2RenderingContext::TEXTURE_2D,
         Some(&out.texture),
         0,
-    );    
+    );
     assert_eq!(
         context.check_framebuffer_status(WebGl2RenderingContext::FRAMEBUFFER),
         WebGl2RenderingContext::FRAMEBUFFER_COMPLETE
     );
-
-
 
     context.use_program(Some(&program));
 
@@ -327,7 +350,10 @@ fn start() -> Result<(), JsValue> {
     // context.uniform1ui(Some(&gws_x_uniform), out.texture_width as u32);
     // context.uniform1ui(Some(&gws_y_uniform), out.texture_height as u32);
     // context.uniform1ui(Some(&gws_z_uniform), 1);
-    context.uniform1ui(Some(&gws_x_uniform), out.texture_width as u32 * out.texture_height as u32);
+    context.uniform1ui(
+        Some(&gws_x_uniform),
+        out.texture_width as u32 * out.texture_height as u32,
+    );
     context.uniform1ui(Some(&gws_y_uniform), 1);
     context.uniform1ui(Some(&gws_z_uniform), 1);
 
@@ -337,6 +363,12 @@ fn start() -> Result<(), JsValue> {
         context.uniform1ui(Some(&input_uniform[2]), gl_buf.texture_height as u32);
         context.active_texture(WebGl2RenderingContext::TEXTURE0 + idx as u32);
         context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&gl_buf.texture))
+    }
+
+    for (_idx, (output_size_uniform, gl_buf)) in output_size_uniforms.iter().zip([&out]).enumerate()
+    {
+        context.uniform1ui(Some(&output_size_uniform[0]), gl_buf.texture_width as u32);
+        context.uniform1ui(Some(&output_size_uniform[1]), gl_buf.texture_height as u32);
     }
 
     // let vert_count = (vertices.len() / 3) as i32;
@@ -489,7 +521,6 @@ impl<'a> WebGlBuffer<'a> {
         Some(self)
     }
 }
-
 
 pub fn compile_shader(
     context: &WebGl2RenderingContext,
