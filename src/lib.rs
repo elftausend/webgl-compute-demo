@@ -80,7 +80,7 @@ fn start() -> Result<(), JsValue> {
                 }
 
                 var counter = 0.0;
-                for (var i = 0u; i < arrayLength(&out) - global_id.x; i++) {
+                for (var i = 0; i < 10; i++) {
                     counter += 1.0;
                 }
 
@@ -246,15 +246,13 @@ fn start() -> Result<(), JsValue> {
         .get_uniform_location(&program, "thread_viewport_height")
         .ok_or("cannot find thread vpw")?;
 
+    // do not bubble up error -> it is possible that the internal glsl compiler removes unused uniforms
     let gws_x_uniform = context
-        .get_uniform_location(&program, "gws_x")
-        .ok_or("cannot find gws")?;
+        .get_uniform_location(&program, "gws_x");
     let gws_y_uniform = context
-        .get_uniform_location(&program, "gws_y")
-        .ok_or("cannot find gws")?;
+        .get_uniform_location(&program, "gws_y");
     let gws_z_uniform = context
-        .get_uniform_location(&program, "gws_z")
-        .ok_or("cannot find gws")?;
+        .get_uniform_location(&program, "gws_z");
 
     let mut input_uniforms = Vec::with_capacity(input_storage_uniform_names.len());
 
@@ -351,11 +349,11 @@ fn start() -> Result<(), JsValue> {
     // context.uniform1ui(Some(&gws_y_uniform), out.texture_height as u32);
     // context.uniform1ui(Some(&gws_z_uniform), 1);
     context.uniform1ui(
-        Some(&gws_x_uniform),
+        gws_x_uniform.as_ref(),
         out.texture_width as u32 * out.texture_height as u32,
     );
-    context.uniform1ui(Some(&gws_y_uniform), 1);
-    context.uniform1ui(Some(&gws_z_uniform), 1);
+    context.uniform1ui(gws_y_uniform.as_ref(), 1);
+    context.uniform1ui(gws_z_uniform.as_ref(), 1);
 
     for (idx, (input_uniform, gl_buf)) in input_uniforms.iter().zip([&lhs]).enumerate() {
         context.uniform1i(Some(&input_uniform[0]), idx as i32);
