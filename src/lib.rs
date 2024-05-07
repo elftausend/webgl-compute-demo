@@ -80,7 +80,7 @@ fn start() -> Result<(), JsValue> {
                 }
 
                 var counter = 0.0;
-                for (var i = 0; i < 10; i++) {
+                for (var i = 0u; i < arrayLength(&out) - global_id.x; i++) {
                     counter += 1.0;
                 }
 
