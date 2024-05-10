@@ -1,6 +1,6 @@
 use js_sys::{Array, Uint32Array};
 use wasm_bindgen::prelude::*;
-use web_sys::{Element, WebGl2RenderingContext, WebGlProgram, WebGlShader, WebGlTexture};
+use web_sys::{Element, WebGl2RenderingContext, WebGlFramebuffer, WebGlProgram, WebGlShader, WebGlTexture};
 
 use naga::{
     back::glsl::{Options, PipelineOptions, Version, Writer},
@@ -80,7 +80,7 @@ fn start() -> Result<(), JsValue> {
                 }
 
                 var counter = 0.0;
-                for (var i = 0; i < 10; i++) {
+                for (var i = 0u; i < arrayLength(&out) - global_id.x; i++) {
                     counter += 1.0;
                 }
 
@@ -247,12 +247,9 @@ fn start() -> Result<(), JsValue> {
         .ok_or("cannot find thread vpw")?;
 
     // do not bubble up error -> it is possible that the internal glsl compiler removes unused uniforms
-    let gws_x_uniform = context
-        .get_uniform_location(&program, "gws_x");
-    let gws_y_uniform = context
-        .get_uniform_location(&program, "gws_y");
-    let gws_z_uniform = context
-        .get_uniform_location(&program, "gws_z");
+    let gws_x_uniform = context.get_uniform_location(&program, "gws_x");
+    let gws_y_uniform = context.get_uniform_location(&program, "gws_y");
+    let gws_z_uniform = context.get_uniform_location(&program, "gws_z");
 
     let mut input_uniforms = Vec::with_capacity(input_storage_uniform_names.len());
 
@@ -290,17 +287,9 @@ fn start() -> Result<(), JsValue> {
 
     let mut lhs = WebGlBuffer::new(&context, 16).unwrap();
 
-    let f32_slice = unsafe {
-        std::slice::from_raw_parts_mut(
-            lhs.texture_data.as_mut_ptr() as *mut f32,
-            lhs.texture_data.len() / 4,
-        )
-    };
-    for (idx, x) in f32_slice.iter_mut().enumerate() {
-        *x = idx as f32;
-    }
-
-    let lhs = lhs.push().unwrap();
+    let data = (0..lhs.len).into_iter().map(|x| x as f32).collect::<Vec<_>>();
+    lhs.write(&context, &data);
+    
 
     /*let mut rhs = WebGlBuffer::new(&context, 16).unwrap();
 
@@ -397,45 +386,8 @@ fn start() -> Result<(), JsValue> {
 
     // read .. bind again
 
-    context.bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, Some(&frame_buf));
-    context.framebuffer_texture_2d(
-        WebGl2RenderingContext::FRAMEBUFFER,
-        WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0,
-        WebGl2RenderingContext::TEXTURE_2D,
-        Some(&out.texture),
-        0,
-    );
-
-    assert_eq!(
-        context.check_framebuffer_status(WebGl2RenderingContext::FRAMEBUFFER),
-        WebGl2RenderingContext::FRAMEBUFFER_COMPLETE
-    );
-
-    context
-        .read_pixels_with_u8_array_and_dst_offset(
-            0,
-            0,
-            out.texture_width as i32,
-            out.texture_height as i32,
-            WebGl2RenderingContext::RGBA,
-            WebGl2RenderingContext::UNSIGNED_BYTE,
-            &mut out.texture_data,
-            0,
-        )
-        .unwrap();
-
-    context.bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, None);
-
-    log!("out: {out:?}");
-
-    let f32_slice = unsafe {
-        std::slice::from_raw_parts_mut(
-            out.texture_data.as_mut_ptr() as *mut f32,
-            out.texture_data.len() / 4,
-        )
-    };
-
-    log!("out: {f32_slice:?}");
+    let read_data = out.read(&context, &frame_buf);
+    log!("out: {read_data:?}");
 
     Ok(())
 }
@@ -446,18 +398,16 @@ fn compute_texture_dimensions(length: usize) -> (usize, usize) {
 }
 
 #[derive(Debug)]
-struct WebGlBuffer<'a> {
+struct WebGlBuffer {
     texture: WebGlTexture,
-    texture_data: Vec<u8>,
     texture_width: usize,
     texture_height: usize,
-    context: &'a WebGl2RenderingContext,
+    len: usize,
 }
 
-impl<'a> WebGlBuffer<'a> {
-    pub fn new(context: &'a WebGl2RenderingContext, len: usize) -> Option<Self> {
+impl WebGlBuffer {
+    pub fn new(context: &WebGl2RenderingContext, len: usize) -> Option<Self> {
         let texture = context.create_texture()?;
-        let texture_data = vec![0u8; len * 4];
         let (texture_width, texture_height) = compute_texture_dimensions(len);
 
         context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&texture));
@@ -483,26 +433,27 @@ impl<'a> WebGlBuffer<'a> {
         );
         context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, None);
 
-        Some(
-            WebGlBuffer {
+        let mut buffer = WebGlBuffer {
                 texture,
-                texture_data,
+                len,
                 texture_width,
                 texture_height,
-                context,
-            }
-            .push()?,
-        )
+        };
+        buffer.write(&context, &vec![0.; len])?;
+        Some(buffer)
     }
 
-    pub fn push(self) -> Option<Self> {
-        self.context
+    pub fn write(&mut self, context: &WebGl2RenderingContext, data: &[f32]) -> Option<()> {
+        context
             .bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&self.texture));
 
+        // let texture_data = vec![0u8; self.len * 4];
+        assert_eq!(data.len(), self.len);
+        let texture_data = unsafe {std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)};
         unsafe {
-            let texture_data = js_sys::Uint8Array::view(&self.texture_data);
+            let texture_data = js_sys::Uint8Array::view(&texture_data);
 
-            self.context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
+            context.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
                 WebGl2RenderingContext::TEXTURE_2D,
                 0,
                 WebGl2RenderingContext::RGBA as i32,
@@ -514,9 +465,47 @@ impl<'a> WebGlBuffer<'a> {
                 Some(&texture_data)
             ).ok()?;
         }
-        self.context
+        context
             .bind_texture(WebGl2RenderingContext::TEXTURE_2D, None);
-        Some(self)
+        Some(())
+    }
+
+    pub fn read(&self, context: &WebGl2RenderingContext, frame_buf: &WebGlFramebuffer) -> Vec<f32> {
+        context
+            .bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, Some(&frame_buf));
+        context.framebuffer_texture_2d(
+            WebGl2RenderingContext::FRAMEBUFFER,
+            WebGl2RenderingContext::COLOR_ATTACHMENT0 + 0,
+            WebGl2RenderingContext::TEXTURE_2D,
+            Some(&self.texture),
+            0,
+        );
+
+        assert_eq!(
+            context
+                .check_framebuffer_status(WebGl2RenderingContext::FRAMEBUFFER),
+            WebGl2RenderingContext::FRAMEBUFFER_COMPLETE
+        );
+
+        let mut read_data = vec![0.; self.len];
+        let texture_data = unsafe {std::slice::from_raw_parts_mut(read_data.as_mut_ptr() as *mut u8, read_data.len() * 4)};
+
+        context
+            .read_pixels_with_u8_array_and_dst_offset(
+                0,
+                0,
+                self.texture_width as i32,
+                self.texture_height as i32,
+                WebGl2RenderingContext::RGBA,
+                WebGl2RenderingContext::UNSIGNED_BYTE,
+                texture_data,
+                0,
+            )
+            .unwrap();
+
+        context
+            .bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, None);
+       read_data 
     }
 }
 
