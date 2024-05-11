@@ -284,21 +284,22 @@ fn start() -> Result<(), JsValue> {
                 .ok_or("cannot find uniform out height")?,
         ]);
     }
-
-    let mut lhs = WebGlBuffer::new(&context, 16).unwrap();
+    const SIZE: usize = 32;
+    log!("dims {:?}", compute_texture_dimensions(SIZE));
+    let mut lhs = WebGlBuffer::new(&context, SIZE).unwrap();
 
     let data = (0..lhs.len).into_iter().map(|x| x as f32).collect::<Vec<_>>();
     lhs.write(&context, &data);
     
 
-    /*let mut rhs = WebGlBuffer::new(&context, 16).unwrap();
+    /*let mut rhs = WebGlBuffer::new(&context, SIZE).unwrap();
 
     let f32_slice = unsafe { std::slice::from_raw_parts_mut(rhs.texture_data.as_mut_ptr() as *mut f32, rhs.texture_data.len() / 4) };
     for x in f32_slice {
         *x = 3.;
     }*/
 
-    let mut out = WebGlBuffer::new(&context, 16).unwrap();
+    let mut out = WebGlBuffer::new(&context, SIZE).unwrap();
 
     // let color_attachments = Array::new();
     let color_attachments = Uint32Array::new(&JsValue::from(1));
@@ -434,10 +435,10 @@ impl WebGlBuffer {
         context.bind_texture(WebGl2RenderingContext::TEXTURE_2D, None);
 
         let mut buffer = WebGlBuffer {
-                texture,
-                len,
-                texture_width,
-                texture_height,
+            texture,
+            len,
+            texture_width,
+            texture_height,
         };
         buffer.write(&context, &vec![0.; len])?;
         Some(buffer)
@@ -449,7 +450,14 @@ impl WebGlBuffer {
 
         // let texture_data = vec![0u8; self.len * 4];
         assert_eq!(data.len(), self.len);
-        let texture_data = unsafe {std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)};
+
+        let mut upload_data = Vec::with_capacity(self.texture_width * self.texture_height);
+        upload_data.extend(data);
+
+        // padding 
+        upload_data.extend((0..self.texture_width * self.texture_height - self.len).map(|_| 0.));
+
+        let texture_data = unsafe {std::slice::from_raw_parts(upload_data.as_ptr() as *const u8, upload_data.len() * 4)};
         unsafe {
             let texture_data = js_sys::Uint8Array::view(&texture_data);
 
@@ -487,7 +495,7 @@ impl WebGlBuffer {
             WebGl2RenderingContext::FRAMEBUFFER_COMPLETE
         );
 
-        let mut read_data = vec![0.; self.len];
+        let mut read_data = vec![0.; self.texture_height * self.texture_width];
         let texture_data = unsafe {std::slice::from_raw_parts_mut(read_data.as_mut_ptr() as *mut u8, read_data.len() * 4)};
 
         context
@@ -505,7 +513,8 @@ impl WebGlBuffer {
 
         context
             .bind_framebuffer(WebGl2RenderingContext::FRAMEBUFFER, None);
-       read_data 
+        read_data.truncate(self.len);
+        read_data
     }
 }
 
