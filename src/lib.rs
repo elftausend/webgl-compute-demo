@@ -80,12 +80,13 @@ fn start() -> Result<(), JsValue> {
                 }
 
                 var counter = 0.0;
-                for (var i = 0u; i < arrayLength(&out) - global_id.x; i++) {
+                for (var i = 0u; i < 3110u; i++) {
                     counter += 1.0;
                 }
 
                 // if out is used on the right side: problem at the moment
                 out[global_id.x] = counter * x[global_id.x];
+                // out[global_id.x] = f32(global_id.x) + x[global_id.x] * 0.00000001;
                 // out[global_id.x] = 3.0;
             }
 
@@ -284,7 +285,7 @@ fn start() -> Result<(), JsValue> {
                 .ok_or("cannot find uniform out height")?,
         ]);
     }
-    const SIZE: usize = 32;
+    const SIZE: usize = 19300024;
     log!("dims {:?}", compute_texture_dimensions(SIZE));
     let mut lhs = WebGlBuffer::new(&context, SIZE).unwrap();
 
@@ -299,7 +300,9 @@ fn start() -> Result<(), JsValue> {
         *x = 3.;
     }*/
 
+    log!("alloc out");
     let mut out = WebGlBuffer::new(&context, SIZE).unwrap();
+    log!("fin alloc out");
 
     // let color_attachments = Array::new();
     let color_attachments = Uint32Array::new(&JsValue::from(1));
@@ -367,12 +370,14 @@ fn start() -> Result<(), JsValue> {
         Some(&indices_buffer),
     );
 
+    log!("start");
     context.draw_elements_with_i32(
         WebGl2RenderingContext::TRIANGLES,
         6,
         WebGl2RenderingContext::UNSIGNED_SHORT,
         0,
     );
+    log!("end");
 
     // for all outputs (mind + 0)
     context.framebuffer_texture_2d(
@@ -388,7 +393,12 @@ fn start() -> Result<(), JsValue> {
     // read .. bind again
 
     let read_data = out.read(&context, &frame_buf);
-    log!("out: {read_data:?}");
+    // log!("out: {read_data:?}");
+    log!("finished read: {:?}", &read_data[read_data.len() - 100..]);
+
+    context.delete_texture(Some(&out.texture));
+    context.delete_texture(Some(&lhs.texture));
+    context.delete_framebuffer(Some(&frame_buf));
 
     Ok(())
 }
@@ -440,19 +450,20 @@ impl WebGlBuffer {
             texture_width,
             texture_height,
         };
-        buffer.write(&context, &vec![0.; len])?;
+        buffer.write(&context, (0..len).map(|_| &0.))?;
         Some(buffer)
     }
 
-    pub fn write(&mut self, context: &WebGl2RenderingContext, data: &[f32]) -> Option<()> {
+    pub fn write<'a>(&mut self, context: &WebGl2RenderingContext, data: impl IntoIterator<Item = &'a f32>) -> Option<()> {
         context
             .bind_texture(WebGl2RenderingContext::TEXTURE_2D, Some(&self.texture));
 
         // let texture_data = vec![0u8; self.len * 4];
-        assert_eq!(data.len(), self.len);
+        // assert_eq!(data.len(), self.len);
 
         let mut upload_data = Vec::with_capacity(self.texture_width * self.texture_height);
         upload_data.extend(data);
+        assert_eq!(upload_data.len(), self.len);
 
         // padding 
         upload_data.extend((0..self.texture_width * self.texture_height - self.len).map(|_| 0.));
