@@ -11,6 +11,8 @@ crate-type = ["cdylib"]
 js-sys = "0.3.67"
 wasm-bindgen = "0.2.90"
 naga = { git = "https://github.com/elftausend/wgpu", features = ["wgsl-in", "glsl-out"]}
+# custos = { git = "https://github.com/elftausend/custos", branch = "webgl", default-features=false, features = ["webgl"] }
+custos = {path = "../custos", default-features=false, features = ["webgl"]}
 # naga = { path = "../wgpu/naga", features = ["wgsl-in", "glsl-out"]}
 
 [dependencies.web-sys]

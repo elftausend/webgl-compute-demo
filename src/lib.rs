@@ -1,3 +1,4 @@
+use custos::{wgsl::{Glsl, WgslShaderLaunch}, Base, Buffer, Device, Retriever, WebGL};
 use js_sys::{Array, Uint32Array};
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, WebGl2RenderingContext, WebGlFramebuffer, WebGlProgram, WebGlShader, WebGlTexture};
@@ -35,7 +36,94 @@ pub fn parse_and_validate_wgsl(
     Ok((module, info))
 }
 
+// #[wasm_bindgen(start)]
+fn start3() -> Result<(), JsValue> {
+    let device = WebGL::<Base>::new().unwrap();
+    let x = device.buffer([2.; 16]);
+    let mut out: Buffer<f32, _> = device.retrieve(x.len, &x).unwrap();
+    // out.base_mut().write(&[5.; 16]);
+
+    let src = "
+            @group(0)
+            @binding(0)
+            var<storage, read> x: array<f32>;
+
+            @group(0)
+            @binding(1)
+            var<storage, read_write> out: array<f32>;
+            
+            @compute
+            @workgroup_size(32)
+            fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                if global_id.x >= arrayLength(&out) {
+                    return;    
+                }
+
+                var counter = 0.0;
+                for (var i = 0u; i < 10u; i++) {
+                    counter += 1.0;
+                }
+
+                // if out is used on the right side: problem at the moment
+                out[global_id.x] = counter * x[global_id.x];
+                // out[global_id.x] = f32(global_id.x) + x[global_id.x] * 0.00000001;
+                // out[global_id.x] = 3.0;
+            }
+
+    ";
+    let glsl = Glsl::from_wgsl_compute(src).unwrap();
+    log!("glsl: {}", glsl.sources.1[0].src);
+
+    let err = device.launch_shader(src, [x.len() as u32, 1, 1], &[x.base(), out.base()]);
+    log!("err: {err:?}");
+
+    log!("out: {:?}", out.read());
+
+    Ok(())
+}
+
 #[wasm_bindgen(start)]
+fn start2() -> Result<(), JsValue> {
+    let device = WebGL::<Base>::new().unwrap();
+    let lhs = device.buffer([1., 2., 3., 4., 5., 6.,]);
+    let rhs = device.buffer([4., 3., 1., 2., 4., 9.,]);
+    let mut out: Buffer<f32, _> = device.retrieve(lhs.len, (&lhs, &rhs)).unwrap();
+    // out.base_mut().write(&[5.; 16]);
+
+    let src = "
+        @group(0)
+        @binding(0)
+        var<storage, read_write> a: array<f32>;
+        
+        @group(0)
+        @binding(1)
+        var<storage, read_write> b: array<f32>;
+
+        @group(0)
+        @binding(2)
+        var<storage, read_write> out: array<f32>;
+        
+        @compute
+        @workgroup_size(32)
+        fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+            if global_id.x >= arrayLength(&out) {
+                return;    
+            }
+            out[global_id.x] = a[global_id.x] + b[global_id.x];
+        }
+    ";
+    let glsl = Glsl::from_wgsl_compute(src).unwrap();
+    log!("glsl: {}", glsl.sources.1[0].src);
+
+    let err = device.launch_shader(src, [lhs.len() as u32, 1, 1], &[lhs.base(), rhs.base(), out.base()]);
+    log!("err: {err:?}");
+
+    log!("out: {:?}", out.read());
+
+    Ok(())
+}
+
+// #[wasm_bindgen(start)]
 fn start() -> Result<(), JsValue> {
     let document = web_sys::window().unwrap().document().unwrap();
     let canvas = document.get_element_by_id("canvas").unwrap();
@@ -80,7 +168,7 @@ fn start() -> Result<(), JsValue> {
                 }
 
                 var counter = 0.0;
-                for (var i = 0u; i < 3110u; i++) {
+                for (var i = 0u; i < 10u; i++) {
                     counter += 1.0;
                 }
 
@@ -285,7 +373,7 @@ fn start() -> Result<(), JsValue> {
                 .ok_or("cannot find uniform out height")?,
         ]);
     }
-    const SIZE: usize = 19300024;
+    const SIZE: usize = 130;
     log!("dims {:?}", compute_texture_dimensions(SIZE));
     let mut lhs = WebGlBuffer::new(&context, SIZE).unwrap();
 
@@ -343,7 +431,8 @@ fn start() -> Result<(), JsValue> {
     // context.uniform1ui(Some(&gws_z_uniform), 1);
     context.uniform1ui(
         gws_x_uniform.as_ref(),
-        out.texture_width as u32 * out.texture_height as u32,
+        // out.texture_width as u32 * out.texture_height as u32,
+        out.len as u32
     );
     context.uniform1ui(gws_y_uniform.as_ref(), 1);
     context.uniform1ui(gws_z_uniform.as_ref(), 1);
@@ -393,8 +482,8 @@ fn start() -> Result<(), JsValue> {
     // read .. bind again
 
     let read_data = out.read(&context, &frame_buf);
-    // log!("out: {read_data:?}");
-    log!("finished read: {:?}", &read_data[read_data.len() - 100..]);
+    log!("out: {read_data:?}");
+    // log!("finished read: {:?}", &read_data[read_data.len() - 100..]);
 
     context.delete_texture(Some(&out.texture));
     context.delete_texture(Some(&lhs.texture));
