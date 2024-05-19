@@ -1,7 +1,7 @@
-use custos::{wgsl::{Glsl, WgslShaderLaunch}, Base, Buffer, Device, Retriever, WebGL};
-use js_sys::{Array, Uint32Array};
+use custos::{wgsl::Glsl, Base, Buffer, Device, Retriever, WebGL};
+use js_sys::Uint32Array;
 use wasm_bindgen::prelude::*;
-use web_sys::{Element, WebGl2RenderingContext, WebGlFramebuffer, WebGlProgram, WebGlShader, WebGlTexture};
+use web_sys::{WebGl2RenderingContext, WebGlFramebuffer, WebGlProgram, WebGlShader, WebGlTexture};
 
 use naga::{
     back::glsl::{Options, PipelineOptions, Version, Writer},
@@ -74,7 +74,7 @@ fn start3() -> Result<(), JsValue> {
     let glsl = Glsl::from_wgsl_compute(src).unwrap();
     log!("glsl: {}", glsl.sources.1[0].src);
 
-    let err = device.launch_shader(src, [x.len() as u32, 1, 1], &[x.base(), out.base()]);
+    let err = device.launch_shader(src, [x.len() as u32, 1, 1], &[&x, &out]);
     log!("err: {err:?}");
 
     log!("out: {:?}", out.read());
@@ -84,6 +84,11 @@ fn start3() -> Result<(), JsValue> {
 
 #[wasm_bindgen(start)]
 fn start2() -> Result<(), JsValue> {
+
+    std::panic::set_hook(Box::new(|i| {
+        log!("Custom panic hook: {i:?}");
+    }));
+
     let device = WebGL::<Base>::new().unwrap();
     let lhs = device.buffer([1., 2., 3., 4., 5., 6.,]);
     let rhs = device.buffer([4., 3., 1., 2., 4., 9.,]);
@@ -91,17 +96,17 @@ fn start2() -> Result<(), JsValue> {
     // out.base_mut().write(&[5.; 16]);
 
     let src = "
-        @group(0)
-        @binding(0)
+        @group(0) @binding(0)
         var<storage, read_write> a: array<f32>;
         
-        @group(0)
-        @binding(1)
+        @group(0) @binding(1)
         var<storage, read_write> b: array<f32>;
 
-        @group(0)
-        @binding(2)
+        @group(0) @binding(2)
         var<storage, read_write> out: array<f32>;
+        
+        @group(0) @binding(3)
+        var<uniform> c: f32;
         
         @compute
         @workgroup_size(32)
@@ -109,13 +114,14 @@ fn start2() -> Result<(), JsValue> {
             if global_id.x >= arrayLength(&out) {
                 return;    
             }
-            out[global_id.x] = a[global_id.x] + b[global_id.x];
+            out[global_id.x] = a[global_id.x] + b[global_id.x] + c;
         }
     ";
-    let glsl = Glsl::from_wgsl_compute(src).unwrap();
-    log!("glsl: {}", glsl.sources.1[0].src);
+    // let glsl = Glsl::from_wgsl_compute(src).unwrap();
 
-    let err = device.launch_shader(src, [lhs.len() as u32, 1, 1], &[lhs.base(), rhs.base(), out.base()]);
+    // log!("glsl: {}", glsl.sources.1[0].src);
+
+    let err = device.launch_shader(src, [lhs.len() as u32, 1, 1], &[&lhs, &rhs, &out, &1f32]);
     log!("err: {err:?}");
 
     log!("out: {:?}", out.read());
